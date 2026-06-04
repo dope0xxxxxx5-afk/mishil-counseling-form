@@ -1,0 +1,891 @@
+<!--
+  mishil カウンセリングシート + 同意書（iPad入力 / 電子カルテ連携用）
+  初診(initial) / 再診(followup) 分岐対応版
+  ------------------------------------------------------------------
+  ■ フロー
+    入口で「初めての方 / 2回目以降の方」を選択
+    - 初診 : フル問診 + 同意 + 署名   record_type="initial"
+    - 再診 : 当日の状態確認のみ(署名省略) record_type="followup"
+             ※前回の問診・同意内容は継続して有効
+  ■ データベース送信設定
+    下部 <script> 内 CONFIG にプロジェクト情報を入力してください。
+
+    -- 推奨テーブル(最小構成) --
+    create table public.intake_records (
+      id uuid primary key default gen_random_uuid(),
+      created_at timestamptz default now(),
+      record_type text,          -- 'initial' | 'followup'
+      customer_name text,
+      customer_furigana text,
+      customer_tel text,
+      customer_email text,
+      signed_date date,
+      data jsonb
+    );
+    -- 電話番号(customer_tel)で customers と突合し履歴を集約する想定。
+    -- RLS: anonキーで insert のみ許可するポリシーを設定してください。
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>mishil カウンセリングシート</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Old+Mincho:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F4EFEA; --bg-2:#EFE7E0; --card:#FFFFFF;
+    --ink:#46403B; --ink-soft:#6E655E; --muted:#A89E96;
+    --line:#EBE2DA; --line-strong:#DED2C8;
+    --primary:#B89283; --primary-deep:#9A7264; --primary-soft:#F4EAE3;
+    --accent:#C2A878; --danger:#B5746B;
+    --shadow:0 1px 2px rgba(74,64,58,.04), 0 12px 32px -16px rgba(74,64,58,.18);
+    --radius:18px; --radius-sm:13px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:"Zen Kaku Gothic New","Noto Sans JP",sans-serif;color:var(--ink);
+    background:radial-gradient(120% 80% at 80% -10%, #F8F1EA 0%, transparent 55%),radial-gradient(120% 90% at -10% 110%, #EFE6DF 0%, transparent 50%),var(--bg);
+    -webkit-font-smoothing:antialiased;line-height:1.7;min-height:100vh;
+  }
+  .wrap{max-width:780px;margin:0 auto;padding:0 20px 64px;}
+
+  header.brand{text-align:center;padding:40px 0 20px;}
+  .logo-img{width:210px;max-width:60%;height:auto;display:block;margin:0 auto;}
+  .sheet-title{margin-top:20px;font-family:"Zen Old Mincho",serif;font-size:18px;letter-spacing:.16em;color:var(--ink);}
+  .sheet-note{font-size:12px;color:var(--muted);margin-top:6px;letter-spacing:.04em;}
+
+  .steps{display:flex;justify-content:center;gap:8px;margin:24px 0 26px;flex-wrap:wrap;}
+  .steps.hide{display:none;}
+  .step-dot{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);letter-spacing:.06em;}
+  .step-dot .num{width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line-strong);display:grid;place-items:center;font-size:12px;background:var(--card);transition:.3s;font-weight:500;}
+  .step-dot.active{color:var(--primary-deep);font-weight:700;}
+  .step-dot.active .num{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 6px 14px -6px var(--primary);}
+  .step-dot.done .num{background:var(--primary-soft);border-color:var(--primary);color:var(--primary-deep);}
+  .step-dot .bar{width:18px;height:1.5px;background:var(--line-strong);}
+
+  .panel{display:none;animation:fade .45s ease;}
+  .panel.active{display:block;}
+  @keyframes fade{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:26px 24px;margin-bottom:18px;}
+  .eyebrow{display:flex;align-items:center;gap:10px;font-family:"Zen Old Mincho",serif;font-size:15px;letter-spacing:.1em;color:var(--primary-deep);margin:0 0 4px;}
+  .eyebrow::before{content:"";width:22px;height:1.5px;background:var(--accent);display:inline-block;}
+  .card-lead{font-size:12.5px;color:var(--muted);margin:0 0 20px;letter-spacing:.03em;}
+
+  .field{margin-bottom:20px;}
+  .field:last-child{margin-bottom:0;}
+  .label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500;margin-bottom:9px;color:var(--ink);letter-spacing:.02em;}
+  .req{font-size:10px;color:#fff;background:var(--primary);padding:2px 7px;border-radius:20px;letter-spacing:.08em;font-weight:700;}
+  .opt{font-size:10px;color:var(--muted);background:var(--bg-2);padding:2px 7px;border-radius:20px;letter-spacing:.06em;}
+  .hint{font-size:11.5px;color:var(--muted);margin:-4px 0 9px;}
+
+  input[type=text],input[type=tel],input[type=email],input[type=date],input[type=number],textarea,select{width:100%;font-family:inherit;font-size:16px;color:var(--ink);background:#FCFAF8;border:1.5px solid var(--line-strong);border-radius:var(--radius-sm);padding:13px 15px;outline:none;transition:.2s;appearance:none;}
+  input::placeholder,textarea::placeholder{color:#C7BDB4;}
+  input:focus,textarea:focus,select:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px var(--primary-soft);}
+  textarea{resize:none;min-height:96px;line-height:1.6;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row>*{flex:1;min-width:0;}
+  .inline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .unit{font-size:13px;color:var(--ink-soft);}
+
+  .chips{display:flex;flex-wrap:wrap;gap:9px;}
+  .chip{position:relative;display:inline-flex;align-items:center;gap:8px;padding:11px 16px;border:1.5px solid var(--line-strong);border-radius:40px;background:#FCFAF8;cursor:pointer;font-size:14px;color:var(--ink-soft);transition:.18s;min-height:44px;user-select:none;}
+  .chip:active{transform:scale(.97);}
+  .chip input{position:absolute;opacity:0;pointer-events:none;}
+  .chip .tick{width:17px;height:17px;border-radius:50%;border:1.5px solid var(--line-strong);display:grid;place-items:center;transition:.18s;flex:0 0 auto;}
+  .chip .tick::after{content:"";width:7px;height:7px;border-radius:50%;background:transparent;transition:.18s;}
+  .chip.checkbox .tick{border-radius:5px;}
+  .chip.checkbox .tick::after{border-radius:1px;}
+  .chip.sel{background:var(--primary-soft);border-color:var(--primary);color:var(--primary-deep);font-weight:500;}
+  .chip.sel .tick{border-color:var(--primary);background:var(--primary);}
+  .chip.sel .tick::after{background:#fff;}
+
+  .checklist .citem{display:flex;gap:13px;align-items:flex-start;padding:13px 14px;border:1.5px solid var(--line);border-radius:var(--radius-sm);margin-bottom:10px;cursor:pointer;background:#FCFAF8;transition:.18s;}
+  .checklist .citem:active{transform:scale(.995);}
+  .checklist .citem .box{width:24px;height:24px;border-radius:7px;border:1.8px solid var(--line-strong);flex:0 0 auto;display:grid;place-items:center;margin-top:1px;transition:.18s;}
+  .checklist .citem .box svg{width:14px;height:14px;opacity:0;transform:scale(.5);transition:.18s;}
+  .checklist .citem.sel{background:var(--primary-soft);border-color:var(--primary);}
+  .checklist .citem.sel .box{background:var(--primary);border-color:var(--primary);}
+  .checklist .citem.sel .box svg{opacity:1;transform:scale(1);}
+  .checklist .citem input{display:none;}
+  .citem .ctext{font-size:13.5px;color:var(--ink);line-height:1.6;}
+  .citem .ctext small{color:var(--muted);font-size:11.5px;}
+
+  .notice{background:linear-gradient(180deg,#FBF5F0,#F8EFE8);border:1px solid var(--line-strong);border-left:3px solid var(--accent);border-radius:12px;padding:15px 17px;font-size:12.5px;color:var(--ink-soft);line-height:1.85;margin-bottom:18px;}
+  .notice b{color:var(--primary-deep);font-weight:700;}
+  .subhead{font-size:12.5px;font-weight:700;color:var(--primary-deep);letter-spacing:.06em;margin:4px 0 8px;}
+  .rules{counter-reset:r;margin:0 0 4px;padding:0;list-style:none;}
+  .rules li{position:relative;padding:11px 0 11px 38px;font-size:13px;color:var(--ink-soft);border-bottom:1px dashed var(--line);line-height:1.7;}
+  .rules li:last-child{border-bottom:none;}
+  .rules li::before{counter-increment:r;content:counter(r);position:absolute;left:0;top:11px;width:24px;height:24px;border-radius:50%;background:var(--primary-soft);color:var(--primary-deep);font-size:12px;font-weight:700;display:grid;place-items:center;}
+  .rules li b{color:var(--ink);font-weight:700;}
+
+  .sign-wrap{border:1.5px dashed var(--line-strong);border-radius:var(--radius-sm);background:#FCFAF8;position:relative;overflow:hidden;touch-action:none;}
+  #sign{display:block;width:100%;height:210px;touch-action:none;}
+  .sign-placeholder{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;color:#CFC4BB;font-size:14px;letter-spacing:.08em;}
+  .sign-clear{position:absolute;top:10px;right:10px;background:#fff;border:1px solid var(--line-strong);border-radius:30px;padding:7px 14px;font-size:12px;color:var(--ink-soft);font-family:inherit;cursor:pointer;}
+
+  .nav{display:flex;gap:12px;margin-top:6px;}
+  .btn{font-family:inherit;font-size:15px;font-weight:700;letter-spacing:.06em;border:none;border-radius:40px;padding:16px 24px;cursor:pointer;transition:.2s;min-height:54px;}
+  .btn-primary{flex:1;background:var(--primary);color:#fff;box-shadow:0 10px 24px -10px var(--primary-deep);}
+  .btn-primary:active{transform:translateY(1px);}
+  .btn-ghost{background:#fff;color:var(--ink-soft);border:1.5px solid var(--line-strong);flex:0 0 auto;min-width:104px;}
+  .btn:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;}
+
+  .mode-grid{display:flex;flex-direction:column;gap:14px;}
+  .mode-btn{display:flex;align-items:center;gap:16px;text-align:left;padding:22px 22px;border:1.5px solid var(--line-strong);border-radius:var(--radius);background:var(--card);cursor:pointer;transition:.2s;box-shadow:var(--shadow);}
+  .mode-btn:active{transform:scale(.99);}
+  .mode-btn .ic{width:50px;height:50px;border-radius:50%;background:var(--primary-soft);display:grid;place-items:center;flex:0 0 auto;}
+  .mode-btn .ic svg{width:24px;height:24px;stroke:var(--primary-deep);}
+  .mode-btn .mt{font-size:16px;font-weight:700;color:var(--ink);letter-spacing:.04em;}
+  .mode-btn .md{font-size:12px;color:var(--muted);margin-top:3px;}
+  .mode-btn .arr{margin-left:auto;color:var(--primary);font-size:20px;}
+
+  .summary{font-size:13.5px;}
+  .summary .srow{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);}
+  .summary .srow:last-child{border-bottom:none;}
+  .summary .sk{flex:0 0 38%;color:var(--muted);font-size:12.5px;}
+  .summary .sv{flex:1;color:var(--ink);white-space:pre-wrap;word-break:break-word;}
+  .summary .sv.empty{color:#CFC4BB;}
+
+  .done-card{text-align:center;padding:64px 24px;}
+  .done-card .mark{width:76px;height:76px;border-radius:50%;background:var(--primary-soft);display:grid;place-items:center;margin:0 auto 22px;}
+  .done-card h2{font-family:"Zen Old Mincho",serif;font-size:21px;letter-spacing:.1em;margin:0 0 14px;color:var(--ink);}
+  .done-card p{font-size:13.5px;color:var(--ink-soft);margin:0;line-height:1.9;}
+
+  .err{color:var(--danger);font-size:12px;margin-top:8px;display:none;letter-spacing:.02em;}
+  .err.show{display:block;}
+  .foot{text-align:center;font-size:10.5px;color:var(--muted);letter-spacing:.1em;margin-top:8px;}
+
+  @media (min-width:600px){ .card{padding:30px 30px;} .logo-img{width:240px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="brand">
+    <img class="logo-img" src="data:image/png;base64,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" alt="mishil total salon">
+    <div class="sheet-title">カウンセリングシート ・ ご同意書</div>
+    <div class="sheet-note">より安心・快適に施術を受けていただくため、ご記入をお願いいたします。</div>
+  </header>
+
+  <div class="steps hide" id="steps"></div>
+
+  <form id="form" autocomplete="off">
+
+  <!-- ===== 入口：モード選択 ===== -->
+  <section class="panel active" id="modeSelect">
+    <div class="card">
+      <p class="eyebrow">ご来店について</p>
+      <p class="card-lead">当てはまるものをお選びください。</p>
+      <div class="mode-grid">
+        <button type="button" class="mode-btn" data-act="mode" data-mode="initial">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></span>
+          <span><span class="mt">初めての方</span><span class="md">問診・ご同意・ご署名をお願いします</span></span>
+          <span class="arr">›</span>
+        </button>
+        <button type="button" class="mode-btn" data-act="mode" data-mode="followup">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span><span class="mt">2回目以降の方</span><span class="md">本日の状態のみ確認させていただきます</span></span>
+          <span class="arr">›</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       初診フロー（initial）
+       ============================================================ -->
+
+  <!-- STEP 1 -->
+  <section class="panel" data-flow="initial" data-step="0">
+    <div class="card">
+      <p class="eyebrow">お客様情報</p>
+      <p class="card-lead">電子カルテに登録いたします。正確なご入力をお願いいたします。</p>
+
+      <div class="field"><span class="label">お名前（フリガナ）<span class="req">必須</span></span><input type="text" name="furigana" placeholder="ミシル ハナコ"></div>
+      <div class="field"><span class="label">お名前<span class="req">必須</span></span><input type="text" name="name" placeholder="美汁 花子"></div>
+
+      <div class="field">
+        <span class="label">性別<span class="req">必須</span></span>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="gender" value="女性"><span class="tick"></span>女性</label>
+          <label class="chip"><input type="radio" name="gender" value="男性"><span class="tick"></span>男性</label>
+          <label class="chip"><input type="radio" name="gender" value="回答しない"><span class="tick"></span>回答しない</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">生年月日<span class="req">必須</span></span>
+        <div class="inline"><input type="date" name="birthdate" id="birthdate" style="max-width:220px"><span class="unit">満 <b id="ageView">―</b> 歳</span></div>
+      </div>
+
+      <div class="field">
+        <span class="label">郵便番号 / ご住所<span class="opt">任意</span></span>
+        <div class="row" style="margin-bottom:10px"><input type="text" name="postal" placeholder="〒730-0000" style="flex:0 0 auto;width:150px"></div>
+        <input type="text" name="address" placeholder="広島県広島市〇〇区 ...">
+      </div>
+
+      <div class="row">
+        <div class="field" style="flex:1"><span class="label">携帯電話<span class="req">必須</span></span><input type="tel" name="tel" placeholder="090-0000-0000"></div>
+        <div class="field" style="flex:1"><span class="label">メールアドレス<span class="opt">任意</span></span><input type="email" name="email" placeholder="example@mail.com"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">ご職業<span class="opt">任意</span></span>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="occupation" value="会社員"><span class="tick"></span>会社員</label>
+          <label class="chip"><input type="radio" name="occupation" value="自営業"><span class="tick"></span>自営業</label>
+          <label class="chip"><input type="radio" name="occupation" value="主婦"><span class="tick"></span>主婦</label>
+          <label class="chip"><input type="radio" name="occupation" value="パート・アルバイト"><span class="tick"></span>パート・アルバイト</label>
+          <label class="chip"><input type="radio" name="occupation" value="学生"><span class="tick"></span>学生</label>
+          <label class="chip"><input type="radio" name="occupation" value="その他"><span class="tick"></span>その他</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">ご来店のきっかけ<span class="opt">任意</span></span>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="referral" value="Instagram"><span class="tick"></span>Instagram</label>
+          <label class="chip"><input type="radio" name="referral" value="Threads / X"><span class="tick"></span>Threads / X</label>
+          <label class="chip"><input type="radio" name="referral" value="ホームページ"><span class="tick"></span>ホームページ</label>
+          <label class="chip"><input type="radio" name="referral" value="Google検索・MEO"><span class="tick"></span>Google検索</label>
+          <label class="chip"><input type="radio" name="referral" value="ホットペッパー"><span class="tick"></span>ホットペッパー</label>
+          <label class="chip"><input type="radio" name="referral" value="ご紹介"><span class="tick"></span>ご紹介</label>
+        </div>
+        <div class="field" id="referralNameWrap" style="display:none;margin-top:11px;margin-bottom:0"><input type="text" name="referral_name" placeholder="ご紹介者様のお名前"></div>
+      </div>
+    </div>
+    <div class="nav">
+      <button type="button" class="btn btn-ghost" data-act="prev">戻る</button>
+      <button type="button" class="btn btn-primary" data-act="next">次へ進む</button>
+    </div>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="panel" data-flow="initial" data-step="1">
+    <div class="card">
+      <p class="eyebrow">お肌・お身体について</p>
+      <p class="card-lead">安全に施術を行うための確認です。該当するものをお選びください。</p>
+
+      <div class="field">
+        <span class="label">既往症（過去・現在の病気）<span class="opt">任意</span></span>
+        <div class="chips"><label class="chip"><input type="radio" name="medical_history" value="なし"><span class="tick"></span>なし</label><label class="chip"><input type="radio" name="medical_history" value="あり"><span class="tick"></span>あり</label></div>
+        <div id="medicalDetailWrap" style="display:none;margin-top:11px"><input type="text" name="medical_history_detail" placeholder="病名・内容をご記入ください"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">現在、通院・治療中ですか？<span class="opt">任意</span></span>
+        <div class="chips"><label class="chip"><input type="radio" name="treatment" value="いいえ"><span class="tick"></span>いいえ</label><label class="chip"><input type="radio" name="treatment" value="はい"><span class="tick"></span>はい</label></div>
+        <div id="treatmentWrap" style="display:none;margin-top:11px"><input type="text" name="treatment_detail" placeholder="病名・通院内容"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">常備薬・服用中のお薬<span class="opt">任意</span></span>
+        <div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="なし"><span class="tick"></span>なし</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="ピル・ホルモン剤"><span class="tick"></span>ピル・ホルモン剤</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="頭痛薬"><span class="tick"></span>頭痛薬</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="胃薬"><span class="tick"></span>胃薬</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="便秘薬"><span class="tick"></span>便秘薬</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="血圧降下剤"><span class="tick"></span>血圧降下剤</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="抗うつ剤・精神安定剤"><span class="tick"></span>抗うつ剤・精神安定剤</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="アレルギー薬"><span class="tick"></span>アレルギー薬</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="ステロイド系薬"><span class="tick"></span>ステロイド系薬</label>
+          <label class="chip checkbox"><input type="checkbox" name="meds" value="漢方・サプリメント"><span class="tick"></span>漢方・サプリメント</label>
+        </div>
+        <div style="margin-top:11px"><input type="text" name="meds_other" placeholder="その他のお薬名"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">アレルギーはありますか？<span class="opt">任意</span></span>
+        <div class="hint">金属・薬剤・植物・食物・日光（光線過敏症）など</div>
+        <div class="chips"><label class="chip"><input type="radio" name="allergy" value="なし"><span class="tick"></span>なし</label><label class="chip"><input type="radio" name="allergy" value="あり"><span class="tick"></span>あり</label></div>
+        <div id="allergyWrap" style="display:none;margin-top:11px"><input type="text" name="allergy_detail" placeholder="アレルギーの内容"></div>
+      </div>
+
+      <div class="field"><span class="label">健康状態<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="health" value="良好"><span class="tick"></span>良好</label><label class="chip"><input type="radio" name="health" value="普通"><span class="tick"></span>普通</label><label class="chip"><input type="radio" name="health" value="悪い"><span class="tick"></span>悪い</label></div></div>
+      <div class="field"><span class="label">睡眠状態<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="sleep" value="良好"><span class="tick"></span>良好</label><label class="chip"><input type="radio" name="sleep" value="普通"><span class="tick"></span>普通</label><label class="chip"><input type="radio" name="sleep" value="悪い"><span class="tick"></span>悪い</label></div></div>
+
+      <div class="row">
+        <div class="field" style="flex:1"><span class="label">飲酒<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="alcohol" value="飲まない"><span class="tick"></span>飲まない</label><label class="chip"><input type="radio" name="alcohol" value="飲む"><span class="tick"></span>飲む</label></div></div>
+        <div class="field" style="flex:1"><span class="label">喫煙<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="smoking" value="吸わない"><span class="tick"></span>吸わない</label><label class="chip"><input type="radio" name="smoking" value="吸う"><span class="tick"></span>吸う</label></div></div>
+      </div>
+
+      <div id="femaleOnly" style="display:none">
+        <div class="field"><span class="label">生理周期<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="cycle" value="順調"><span class="tick"></span>順調</label><label class="chip"><input type="radio" name="cycle" value="やや不順"><span class="tick"></span>やや不順</label><label class="chip"><input type="radio" name="cycle" value="不順"><span class="tick"></span>不順</label><label class="chip"><input type="radio" name="cycle" value="閉経"><span class="tick"></span>閉経</label></div></div>
+        <div class="field">
+          <span class="label">妊娠・授乳について<span class="req">必須</span></span><div class="hint">安全のため必ずお選びください</div>
+          <div class="chips"><label class="chip"><input type="radio" name="pregnancy" value="該当なし"><span class="tick"></span>該当なし</label><label class="chip"><input type="radio" name="pregnancy" value="妊娠中"><span class="tick"></span>妊娠中</label><label class="chip"><input type="radio" name="pregnancy" value="妊娠の可能性あり"><span class="tick"></span>妊娠の可能性あり</label><label class="chip"><input type="radio" name="pregnancy" value="授乳中"><span class="tick"></span>授乳中</label></div>
+        </div>
+        <div class="field"><span class="label">出産経験<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="childbirth" value="なし"><span class="tick"></span>なし</label><label class="chip"><input type="radio" name="childbirth" value="あり"><span class="tick"></span>あり</label></div></div>
+      </div>
+    </div>
+    <div class="nav"><button type="button" class="btn btn-ghost" data-act="prev">戻る</button><button type="button" class="btn btn-primary" data-act="next">次へ進む</button></div>
+  </section>
+
+  <!-- STEP 3 -->
+  <section class="panel" data-flow="initial" data-step="2">
+    <div class="card">
+      <p class="eyebrow">ご希望について</p>
+      <p class="card-lead">施術の参考にさせていただきます。</p>
+
+      <div class="field">
+        <span class="label">ご希望・ご興味のあるメニュー<span class="opt">任意</span></span><div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="menu" value="光脱毛"><span class="tick"></span>光脱毛</label>
+          <label class="chip checkbox"><input type="checkbox" name="menu" value="ワックス脱毛"><span class="tick"></span>ワックス脱毛</label>
+          <label class="chip checkbox"><input type="checkbox" name="menu" value="シュガーリング"><span class="tick"></span>シュガーリング</label>
+          <label class="chip checkbox"><input type="checkbox" name="menu" value="フェイシャル"><span class="tick"></span>フェイシャル</label>
+          <label class="chip checkbox"><input type="checkbox" name="menu" value="ボディケア"><span class="tick"></span>ボディケア</label>
+          <label class="chip checkbox"><input type="checkbox" name="menu" value="その他"><span class="tick"></span>その他</label>
+        </div>
+      </div>
+
+      <div class="field"><span class="label">脱毛のご経験<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="hair_exp" value="なし"><span class="tick"></span>なし</label><label class="chip"><input type="radio" name="hair_exp" value="あり"><span class="tick"></span>あり</label><label class="chip"><input type="radio" name="hair_exp" value="現在も他店に通っている"><span class="tick"></span>現在も他店に通っている</label></div></div>
+
+      <div class="field">
+        <span class="label">気になる部位<span class="opt">任意</span></span><div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="顔"><span class="tick"></span>顔</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="うで"><span class="tick"></span>うで</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="わき"><span class="tick"></span>わき</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="胸"><span class="tick"></span>胸</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="お腹"><span class="tick"></span>お腹</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="背中"><span class="tick"></span>背中</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="うなじ"><span class="tick"></span>うなじ</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="ヒップ"><span class="tick"></span>ヒップ</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="あし"><span class="tick"></span>あし</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="Vライン"><span class="tick"></span>Vライン</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="Iライン"><span class="tick"></span>Iライン</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="Oライン"><span class="tick"></span>Oライン</label>
+          <label class="chip checkbox"><input type="checkbox" name="areas" value="全身"><span class="tick"></span>全身</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">普段のムダ毛の処理方法<span class="opt">任意</span></span><div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="剃る（カミソリ）"><span class="tick"></span>剃る（カミソリ）</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="電気シェーバー"><span class="tick"></span>電気シェーバー</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="抜く"><span class="tick"></span>抜く</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="脱色"><span class="tick"></span>脱色</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="ワックス"><span class="tick"></span>ワックス</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="脱毛サロン"><span class="tick"></span>脱毛サロン</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="医療脱毛"><span class="tick"></span>医療脱毛</label>
+          <label class="chip checkbox"><input type="checkbox" name="care_method" value="ほぼしない"><span class="tick"></span>ほぼしない</label>
+        </div>
+      </div>
+
+      <div class="field"><span class="label">自己処理の頻度<span class="opt">任意</span></span><div class="chips"><label class="chip"><input type="radio" name="care_freq" value="毎日"><span class="tick"></span>毎日</label><label class="chip"><input type="radio" name="care_freq" value="週に数回"><span class="tick"></span>週に数回</label><label class="chip"><input type="radio" name="care_freq" value="週1回"><span class="tick"></span>週1回</label><label class="chip"><input type="radio" name="care_freq" value="月数回"><span class="tick"></span>月数回</label><label class="chip"><input type="radio" name="care_freq" value="ほぼしない"><span class="tick"></span>ほぼしない</label></div></div>
+
+      <div class="field">
+        <span class="label">痛みについて<span class="opt">任意</span></span><div class="hint">ワックス・シュガーリングは刺激を伴うため、出力や施術方法の参考にいたします</div>
+        <div class="chips"><label class="chip"><input type="radio" name="pain" value="痛みに強い方"><span class="tick"></span>痛みに強い方</label><label class="chip"><input type="radio" name="pain" value="普通"><span class="tick"></span>普通</label><label class="chip"><input type="radio" name="pain" value="痛みに弱い方"><span class="tick"></span>痛みに弱い方</label><label class="chip"><input type="radio" name="pain" value="とても不安"><span class="tick"></span>とても不安</label></div>
+      </div>
+
+      <div class="field">
+        <span class="label">現在のお肌のお悩み<span class="opt">任意</span></span><div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="乾燥"><span class="tick"></span>乾燥</label>
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="敏感肌"><span class="tick"></span>敏感肌</label>
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="ニキビ・吹き出物"><span class="tick"></span>ニキビ・吹き出物</label>
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="色素沈着"><span class="tick"></span>色素沈着</label>
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="埋もれ毛"><span class="tick"></span>埋もれ毛</label>
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="毛穴"><span class="tick"></span>毛穴</label>
+          <label class="chip checkbox"><input type="checkbox" name="skin_concern" value="赤み"><span class="tick"></span>赤み</label>
+        </div>
+      </div>
+
+      <div class="field"><span class="label">ご質問・ご要望<span class="opt">任意</span></span><textarea name="requests" placeholder="施術への不安や、当日聞いておきたいことなど"></textarea></div>
+    </div>
+    <div class="nav"><button type="button" class="btn btn-ghost" data-act="prev">戻る</button><button type="button" class="btn btn-primary" data-act="next">次へ進む</button></div>
+  </section>
+
+  <!-- STEP 4 -->
+  <section class="panel" data-flow="initial" data-step="3">
+    <div class="card">
+      <p class="eyebrow">施術前のご確認・同意書</p>
+      <p class="card-lead">安心して施術を受けていただくための大切な内容です。</p>
+      <div class="notice">以下に<b>当てはまる項目がある方</b>は、施術をお受けいただけない場合や、医師へのご相談をお願いする場合がございます。<b>該当する項目にチェック</b>をお願いいたします。（該当がなければチェック不要です）</div>
+      <div class="checklist">
+        <label class="citem"><input type="checkbox" name="contra" value="妊娠中または妊娠の可能性がある"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">妊娠中、または妊娠の可能性がある</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="授乳中である"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">授乳中である</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="光線過敏症・光アレルギーがある"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">光線過敏症（ポルフィリン症）または光アレルギーがある</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="ホルモン剤を服用している"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">ホルモン剤（ピル）を服用している（中・高用量）</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="ケロイド体質・傷履歴がある"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">ケロイド体質、またはケロイド状の傷履歴がある</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="内科系疾患・感染症がある"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">肝臓病・心臓病・糖尿病、その他の内科系疾患や感染症を患っている</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="てんかんの既往症がある"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">てんかん発生の既往症がある</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="ステロイド系薬を常用している"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">ステロイド系薬を常用している</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="皮膚疾患・かぶれやすい"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">皮膚疾患がある、または水疱・かぶれなどを起こしやすい</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="過去の除毛減毛でトラブルがあった"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">過去の除毛・減毛でトラブルが起きたことがある</span></label>
+        <label class="citem"><input type="checkbox" name="contra" value="通院中・経過観察中である"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext">通院中、または経過観察中である</span></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="eyebrow">安全に施術を受けていただくために</p>
+      <p class="subhead">光脱毛・ワックス・シュガーリング 共通</p>
+      <ol class="rules">
+        <li><b>日焼けは避けてください。</b>肌の色素が濃くなると光を過剰に吸収し、お肌への負担となる場合があります。状態により照射をお断りする場合がございます。</li>
+        <li><b>お肌を乾燥させないでください。</b>施術前後1週間は特に保湿を心がけてください。乾燥がひどい場合は施術をお受けいただけないことがございます。</li>
+        <li>お薬を使用中・通院中の方は、まず<b>主治医にご相談</b>のうえご来店ください。お薬を塗布中の箇所は施術をお断りする場合があります。</li>
+        <li>自己処理は毛抜きを避け、<b>電気シェーバー</b>をご使用ください。</li>
+        <li>進行中のニキビ・炎症がある箇所は施術できません。</li>
+        <li>大事なご予定の3日前後は、赤みや内出血が出る場合があるためご注意ください。</li>
+      </ol>
+      <p class="subhead" style="margin-top:14px">ワックス・シュガーリングについて</p>
+      <ol class="rules">
+        <li>施術後、<b>赤みが1〜2時間程度</b>出る場合があります。日焼け後のようなほてりを感じることがあります。</li>
+        <li>乾燥により施術直後に<b>表皮剥離（薄く皮膚が剥ける）</b>が起こる場合があります。万一戻らない場合はすぐにサロンへご連絡ください。</li>
+        <li>皮膚が柔らかい箇所やしっかりした毛では、<b>内出血</b>が起こる場合があります。</li>
+        <li>施術後は毛穴が開くため、汚れや菌が入ると<b>毛のう炎（ブツブツ）</b>の原因になります。クレンジング・洗顔・保清・保湿を心がけてください。</li>
+        <li>体質により<b>埋没毛</b>が生じる場合があります。腕や脚でも起こりうる症状です。</li>
+        <li>シュガーリング・ワックスは永久脱毛ではなく、10〜14日程で毛が生えてきます（個人差があります）。</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <div class="field">
+        <span class="label">SNS等へのビフォーアフター写真の掲載<span class="opt">任意</span></span><div class="hint">お顔やお名前が特定されない形で使用いたします</div>
+        <div class="chips"><label class="chip"><input type="radio" name="photo_consent" value="協力可"><span class="tick"></span>協力できる</label><label class="chip"><input type="radio" name="photo_consent" value="不可"><span class="tick"></span>希望しない</label></div>
+      </div>
+      <div class="checklist" style="margin-top:6px">
+        <label class="citem" id="agreeItem"><input type="checkbox" name="agree" value="同意する"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></span><span class="ctext"><b>上記の禁忌事項・注意事項をすべて確認し、理解・納得しました。</b><br><small>申告のない事項に起因するトラブルについては責任を負いかねる旨、了承のうえ施術を申し込みます。</small></span></label>
+      </div>
+      <p class="err" id="agreeErr">同意いただける場合はチェックをお願いいたします。</p>
+    </div>
+    <div class="nav"><button type="button" class="btn btn-ghost" data-act="prev">戻る</button><button type="button" class="btn btn-primary" data-act="next">署名へ進む</button></div>
+  </section>
+
+  <!-- STEP 5 -->
+  <section class="panel" data-flow="initial" data-step="4">
+    <div class="card">
+      <p class="eyebrow">ご署名</p>
+      <p class="card-lead">内容にご同意のうえ、下記にご署名をお願いいたします。</p>
+      <div class="field"><span class="label">本日の日付</span><input type="date" name="signed_date" id="signedDate" style="max-width:220px"></div>
+      <div class="field">
+        <span class="label">ご署名<span class="req">必須</span></span><div class="hint">指またはApple Pencilでご記入ください</div>
+        <div class="sign-wrap"><canvas id="sign"></canvas><div class="sign-placeholder" id="signPh">こちらにご署名ください</div><button type="button" class="sign-clear" id="signClear">書き直す</button></div>
+        <p class="err" id="signErr">ご署名をお願いいたします。</p>
+      </div>
+    </div>
+    <div class="card"><p class="eyebrow">ご入力内容の確認</p><div class="summary" id="summary"></div></div>
+    <div class="nav"><button type="button" class="btn btn-ghost" data-act="prev">戻る</button><button type="button" class="btn btn-primary" data-act="submit">この内容で送信する</button></div>
+  </section>
+
+  <!-- ============================================================
+       再診フロー（followup）— 当日確認のみ・署名省略
+       ============================================================ -->
+
+  <!-- F STEP 1 -->
+  <section class="panel" data-flow="followup" data-step="0">
+    <div class="card">
+      <p class="eyebrow">2回目以降のお客様</p>
+      <p class="card-lead">前回の問診・ご同意内容は継続して有効です。本日の状態のみ確認させてください。</p>
+      <div class="field"><span class="label">お名前<span class="req">必須</span></span><input type="text" name="f_name" placeholder="美汁 花子"></div>
+      <div class="field"><span class="label">携帯電話<span class="req">必須</span></span><div class="hint">ご登録カルテとの照合に使用します</div><input type="tel" name="f_tel" placeholder="090-0000-0000"></div>
+      <div class="field">
+        <span class="label">性別<span class="req">必須</span></span>
+        <div class="chips"><label class="chip"><input type="radio" name="f_gender" value="女性"><span class="tick"></span>女性</label><label class="chip"><input type="radio" name="f_gender" value="男性"><span class="tick"></span>男性</label><label class="chip"><input type="radio" name="f_gender" value="回答しない"><span class="tick"></span>回答しない</label></div>
+      </div>
+    </div>
+    <div class="nav"><button type="button" class="btn btn-ghost" data-act="prev">戻る</button><button type="button" class="btn btn-primary" data-act="next">次へ進む</button></div>
+  </section>
+
+  <!-- F STEP 2 -->
+  <section class="panel" data-flow="followup" data-step="1">
+    <div class="card">
+      <p class="eyebrow">前回の施術について</p>
+      <p class="card-lead">よりご満足いただけるよう、前回の仕上がりをお聞かせください。</p>
+
+      <div class="field">
+        <span class="label">前回の施術のご満足度<span class="opt">任意</span></span>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="f_satisfaction" value="満足"><span class="tick"></span>満足</label>
+          <label class="chip"><input type="radio" name="f_satisfaction" value="やや満足"><span class="tick"></span>やや満足</label>
+          <label class="chip"><input type="radio" name="f_satisfaction" value="普通"><span class="tick"></span>普通</label>
+          <label class="chip"><input type="radio" name="f_satisfaction" value="やや不満"><span class="tick"></span>やや不満</label>
+          <label class="chip"><input type="radio" name="f_satisfaction" value="不満"><span class="tick"></span>不満</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">毛の変化の実感<span class="opt">任意</span></span><div class="hint">前回からの生え方・量など</div>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="f_reduction" value="しっかり減った"><span class="tick"></span>しっかり減った</label>
+          <label class="chip"><input type="radio" name="f_reduction" value="少し減った"><span class="tick"></span>少し減った</label>
+          <label class="chip"><input type="radio" name="f_reduction" value="思ったより減っていない"><span class="tick"></span>思ったより減っていない</label>
+          <label class="chip"><input type="radio" name="f_reduction" value="変化を感じない"><span class="tick"></span>変化を感じない</label>
+          <label class="chip"><input type="radio" name="f_reduction" value="まだわからない"><span class="tick"></span>まだわからない</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">前回の施術後、お肌のトラブルはありましたか？<span class="opt">任意</span></span>
+        <div class="hint">赤み・かゆみ・毛のう炎（ブツブツ）・内出血・埋没毛 など</div>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="f_post_trouble" value="なし"><span class="tick"></span>なし</label>
+          <label class="chip"><input type="radio" name="f_post_trouble" value="あり"><span class="tick"></span>あり</label>
+        </div>
+        <div id="fTroubleWrap" style="display:none;margin-top:11px"><input type="text" name="f_post_trouble_detail" placeholder="トラブルの内容・出た部位など"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">前回の痛みはいかがでしたか？<span class="opt">任意</span></span>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="f_last_pain" value="問題なかった"><span class="tick"></span>問題なかった</label>
+          <label class="chip"><input type="radio" name="f_last_pain" value="少し痛かった"><span class="tick"></span>少し痛かった</label>
+          <label class="chip"><input type="radio" name="f_last_pain" value="痛みが強かった"><span class="tick"></span>痛みが強かった</label>
+        </div>
+      </div>
+
+      <div class="field"><span class="label">前回の感想・お気づきの点<span class="opt">任意</span></span><textarea name="f_feedback" placeholder="うれしかった点、気になった点など自由にお書きください"></textarea></div>
+    </div>
+
+    <div class="card">
+      <p class="eyebrow">本日の状態</p>
+      <p class="card-lead">前回から変化があった点を中心に確認させてください。</p>
+
+      <div class="field">
+        <span class="label">前回から、体調・お薬・お肌に変化はありますか？<span class="req">必須</span></span>
+        <div class="chips"><label class="chip"><input type="radio" name="f_change" value="なし"><span class="tick"></span>変化なし</label><label class="chip"><input type="radio" name="f_change" value="あり"><span class="tick"></span>変化あり</label></div>
+        <div id="fChangeWrap" style="display:none;margin-top:11px"><textarea name="f_change_detail" placeholder="変化の内容（新しいお薬・通院・肌トラブル・日焼け など）"></textarea></div>
+      </div>
+
+      <div class="field">
+        <span class="label">本日の体調<span class="opt">任意</span></span>
+        <div class="chips"><label class="chip"><input type="radio" name="f_condition" value="良好"><span class="tick"></span>良好</label><label class="chip"><input type="radio" name="f_condition" value="普通"><span class="tick"></span>普通</label><label class="chip"><input type="radio" name="f_condition" value="すぐれない"><span class="tick"></span>すぐれない</label></div>
+      </div>
+
+      <div id="fFemaleOnly" style="display:none">
+        <div class="field">
+          <span class="label">妊娠・授乳について<span class="req">必須</span></span><div class="hint">安全のため毎回ご確認しています</div>
+          <div class="chips"><label class="chip"><input type="radio" name="f_pregnancy" value="該当なし"><span class="tick"></span>該当なし</label><label class="chip"><input type="radio" name="f_pregnancy" value="妊娠中"><span class="tick"></span>妊娠中</label><label class="chip"><input type="radio" name="f_pregnancy" value="妊娠の可能性あり"><span class="tick"></span>妊娠の可能性あり</label><label class="chip"><input type="radio" name="f_pregnancy" value="授乳中"><span class="tick"></span>授乳中</label></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">本日ご希望のメニュー<span class="opt">任意</span></span><div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="f_menu" value="光脱毛"><span class="tick"></span>光脱毛</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_menu" value="ワックス脱毛"><span class="tick"></span>ワックス脱毛</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_menu" value="シュガーリング"><span class="tick"></span>シュガーリング</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_menu" value="フェイシャル"><span class="tick"></span>フェイシャル</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_menu" value="ボディケア"><span class="tick"></span>ボディケア</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">本日施術を希望する部位<span class="opt">任意</span></span><div class="hint">複数選択できます</div>
+        <div class="chips">
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="顔"><span class="tick"></span>顔</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="うで"><span class="tick"></span>うで</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="わき"><span class="tick"></span>わき</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="胸"><span class="tick"></span>胸</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="お腹"><span class="tick"></span>お腹</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="背中"><span class="tick"></span>背中</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="うなじ"><span class="tick"></span>うなじ</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="ヒップ"><span class="tick"></span>ヒップ</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="あし"><span class="tick"></span>あし</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="Vライン"><span class="tick"></span>Vライン</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="Iライン"><span class="tick"></span>Iライン</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="Oライン"><span class="tick"></span>Oライン</label>
+          <label class="chip checkbox"><input type="checkbox" name="f_areas" value="全身"><span class="tick"></span>全身</label>
+        </div>
+      </div>
+
+      <div class="field"><span class="label">気になること・ご要望<span class="opt">任意</span></span><textarea name="f_requests" placeholder="お肌で気になることや、本日のご要望など"></textarea></div>
+    </div>
+    <div class="nav"><button type="button" class="btn btn-ghost" data-act="prev">戻る</button><button type="button" class="btn btn-primary" data-act="submit">この内容で送信する</button></div>
+  </section>
+
+  <!-- ===== 完了（共通） ===== -->
+  <section class="panel" id="done">
+    <div class="card done-card">
+      <div class="mark"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#9A7264" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></div>
+      <h2>ありがとうございました</h2>
+      <p>ご入力内容を受け付けました。スタッフが確認いたします。<br>このまま端末をスタッフへお渡しください。</p>
+    </div>
+  </section>
+
+  </form>
+  <p class="foot">mishil ・ 広島 ／ Counseling &amp; Consent</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+     ▼ データベース送信設定（Supabase）
+     ============================================================ */
+  var CONFIG = {
+    supabaseUrl: 'https://gvaqzygywpdwsubjnjas.supabase.co',
+    supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2YXF6eWd5d3Bkd3N1YmpuamFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MzIxMzksImV4cCI6MjA5NjEwODEzOX0.Q1wiS3lIypzSUbqd1PehC1UA0bC0348wh465uOpKbts',
+    table:       'intake_records'
+  };
+
+  var FLOW_LABELS = {
+    initial:  ['お客様情報','お肌・お身体','ご希望','ご同意','ご署名'],
+    followup: ['お客様確認','前回と本日']
+  };
+
+  var modeSelect = document.getElementById('modeSelect');
+  var donePanel  = document.getElementById('done');
+  var stepsBar   = document.getElementById('steps');
+  var flow=null, seq=[], idx=0;
+
+  /* ---- チップ選択 ---- */
+  document.querySelectorAll('.chip').forEach(function(chip){
+    var input=chip.querySelector('input');
+    input.addEventListener('change', function(){
+      if(input.type==='radio'){
+        document.querySelectorAll('input[name="'+input.name+'"]').forEach(function(i){ i.closest('.chip').classList.toggle('sel', i.checked); });
+      }else{ chip.classList.toggle('sel', input.checked); }
+    });
+  });
+  document.querySelectorAll('.citem').forEach(function(item){
+    var input=item.querySelector('input');
+    input.addEventListener('change', function(){ item.classList.toggle('sel', input.checked); });
+  });
+
+  /* ---- 条件付き表示 ---- */
+  function bindReveal(name, showValue, target){
+    document.querySelectorAll('input[name="'+name+'"]').forEach(function(i){
+      i.addEventListener('change', function(){
+        var any=document.querySelector('input[name="'+name+'"][value="'+showValue+'"]');
+        document.getElementById(target).style.display=(any&&any.checked)?'block':'none';
+      });
+    });
+  }
+  bindReveal('medical_history','あり','medicalDetailWrap');
+  bindReveal('treatment','はい','treatmentWrap');
+  bindReveal('allergy','あり','allergyWrap');
+  bindReveal('f_change','あり','fChangeWrap');
+  bindReveal('f_post_trouble','あり','fTroubleWrap');
+
+  document.querySelectorAll('input[name="referral"]').forEach(function(i){
+    i.addEventListener('change', function(){
+      var ref=document.querySelector('input[name="referral"]:checked');
+      document.getElementById('referralNameWrap').style.display=(ref&&ref.value==='ご紹介')?'block':'none';
+    });
+  });
+
+  function bindGender(name, target, clearNames){
+    document.querySelectorAll('input[name="'+name+'"]').forEach(function(i){
+      i.addEventListener('change', function(){
+        var g=document.querySelector('input[name="'+name+'"]:checked');
+        var show=(g&&g.value==='女性');
+        document.getElementById(target).style.display=show?'block':'none';
+        if(!show){ clearNames.forEach(function(n){ document.querySelectorAll('input[name="'+n+'"]').forEach(function(x){ if(x.checked){x.checked=false;x.closest('.chip').classList.remove('sel');} }); }); }
+      });
+    });
+  }
+  bindGender('gender','femaleOnly',['cycle','pregnancy','childbirth']);
+  bindGender('f_gender','fFemaleOnly',['f_pregnancy']);
+
+  /* ---- 年齢自動計算 ---- */
+  var bd=document.getElementById('birthdate');
+  bd.addEventListener('change', function(){
+    var v=bd.value; if(!v){document.getElementById('ageView').textContent='―';return;}
+    var t=new Date(), b=new Date(v); var age=t.getFullYear()-b.getFullYear(); var m=t.getMonth()-b.getMonth();
+    if(m<0||(m===0&&t.getDate()<b.getDate())) age--;
+    document.getElementById('ageView').textContent=(age>=0&&age<130)?age:'―';
+  });
+  (function(){ var d=new Date(); document.getElementById('signedDate').value=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+
+  /* ---- 署名キャンバス ---- */
+  var canvas=document.getElementById('sign'), ctx=canvas.getContext('2d');
+  var drawing=false, hasSign=false, last=null, sized=false;
+  function sizeCanvas(){
+    var rect=canvas.getBoundingClientRect(); if(rect.width===0) return;
+    var ratio=window.devicePixelRatio||1; var prev=hasSign?canvas.toDataURL():null;
+    canvas.width=Math.round(rect.width*ratio); canvas.height=Math.round(rect.height*ratio);
+    ctx.setTransform(ratio,0,0,ratio,0,0); ctx.lineWidth=2.4; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#46403B';
+    if(prev){ var img=new Image(); img.onload=function(){ctx.drawImage(img,0,0,rect.width,rect.height);}; img.src=prev; }
+    sized=true;
+  }
+  function getPos(e){ var r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; }
+  canvas.addEventListener('pointerdown', function(e){ e.preventDefault(); if(!sized) sizeCanvas(); drawing=true; last=getPos(e); try{canvas.setPointerCapture(e.pointerId);}catch(_){ } if(!hasSign){hasSign=true;document.getElementById('signPh').style.display='none';} });
+  canvas.addEventListener('pointermove', function(e){ if(!drawing)return; e.preventDefault(); var p=getPos(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; });
+  function stop(){ drawing=false; }
+  canvas.addEventListener('pointerup', stop); canvas.addEventListener('pointercancel', stop);
+  document.getElementById('signClear').addEventListener('click', function(){ ctx.clearRect(0,0,canvas.width,canvas.height); hasSign=false; document.getElementById('signPh').style.display='grid'; });
+
+  /* ---- ステップバー描画 ---- */
+  function buildDots(labels){
+    stepsBar.innerHTML='';
+    labels.forEach(function(lb,i){
+      if(i>0){ var bar=document.createElement('span'); bar.className='bar'; stepsBar.appendChild(bar); }
+      var d=document.createElement('div'); d.className='step-dot'+(i===0?' active':'');
+      d.dataset.s=i; d.innerHTML='<span class="num">'+(i+1)+'</span>'+lb;
+      d.addEventListener('click', function(){ var t=parseInt(d.dataset.s,10); if(t<idx) showStep(t); });
+      stepsBar.appendChild(d);
+    });
+  }
+  function updateDots(){
+    Array.prototype.slice.call(stepsBar.querySelectorAll('.step-dot')).forEach(function(d,i){
+      d.classList.toggle('active', i===idx); d.classList.toggle('done', i<idx);
+    });
+  }
+
+  /* ---- 画面遷移 ---- */
+  function hideAll(){ document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');}); }
+  function showModeSelect(){ hideAll(); modeSelect.classList.add('active'); stepsBar.classList.add('hide'); flow=null; window.scrollTo({top:0,behavior:'smooth'}); }
+  function startFlow(name){
+    flow=name; seq=Array.prototype.slice.call(document.querySelectorAll('.panel[data-flow="'+name+'"]'))
+      .sort(function(a,b){return (+a.dataset.step)-(+b.dataset.step);});
+    idx=0; buildDots(FLOW_LABELS[name]); stepsBar.classList.remove('hide'); showStep(0);
+  }
+  function showStep(n){
+    if(n<0||n>=seq.length) return;
+    idx=n; hideAll(); seq[idx].classList.add('active'); updateDots();
+    if(flow==='initial' && idx===4){ buildSummary(); setTimeout(sizeCanvas,60); }
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+
+  function isFemale(name){ var g=document.querySelector('input[name="'+name+'"]:checked'); return g&&g.value==='女性'; }
+
+  function validate(){
+    if(flow==='initial'){
+      if(idx===0){
+        var g=document.querySelector('input[name="gender"]:checked');
+        var ok=['furigana','name','tel'].every(function(k){return document.querySelector('[name="'+k+'"]').value.trim()!=='';})&&bd.value!==''&&!!g;
+        if(!ok) alert('お名前（フリガナ・お名前）・性別・生年月日・携帯電話のご入力をお願いいたします。');
+        return ok;
+      }
+      if(idx===1 && isFemale('gender') && !document.querySelector('input[name="pregnancy"]:checked')){ alert('妊娠・授乳についてのご選択をお願いいたします。'); return false; }
+      if(idx===3){
+        var agree=document.querySelector('input[name="agree"]:checked'); var err=document.getElementById('agreeErr');
+        if(!agree){ err.classList.add('show'); document.getElementById('agreeItem').scrollIntoView({behavior:'smooth',block:'center'}); return false; }
+        err.classList.remove('show');
+      }
+    }else if(flow==='followup'){
+      if(idx===0){
+        var g2=document.querySelector('input[name="f_gender"]:checked');
+        var ok2=['f_name','f_tel'].every(function(k){return document.querySelector('[name="'+k+'"]').value.trim()!=='';})&&!!g2;
+        if(!ok2) alert('お名前・携帯電話・性別のご入力をお願いいたします。');
+        return ok2;
+      }
+      if(idx===1){
+        if(!document.querySelector('input[name="f_change"]:checked')){ alert('前回からの変化についてお選びください。'); return false; }
+        if(isFemale('f_gender') && !document.querySelector('input[name="f_pregnancy"]:checked')){ alert('妊娠・授乳についてのご選択をお願いいたします。'); return false; }
+      }
+    }
+    return true;
+  }
+
+  function next(){ if(!validate()) return; if(idx>=seq.length-1) return; showStep(idx+1); }
+  function prev(){ if(idx===0){ showModeSelect(); } else { showStep(idx-1); } }
+
+  /* ---- クリックルーティング ---- */
+  document.addEventListener('click', function(e){
+    var b=e.target.closest('[data-act]'); if(!b) return;
+    var a=b.dataset.act;
+    if(a==='mode') startFlow(b.dataset.mode);
+    else if(a==='next') next();
+    else if(a==='prev') prev();
+    else if(a==='submit') submit();
+  });
+
+  /* ---- データ収集 ---- */
+  function val(name){ var e=document.querySelector('[name="'+name+'"]'); return e?e.value.trim():''; }
+  function rv(name){ var e=document.querySelector('input[name="'+name+'"]:checked'); return e?e.value:''; }
+  function mv(name){ return Array.prototype.slice.call(document.querySelectorAll('input[name="'+name+'"]:checked')).map(function(e){return e.value;}); }
+
+  function collectInitial(){
+    return {
+      meta:{ form:"mishil_counseling", version:"1.2", record_type:"initial", submitted_at:new Date().toISOString() },
+      profile:{ furigana:val('furigana'), name:val('name'), gender:rv('gender'), birthdate:val('birthdate'),
+        age:(function(){var a=document.getElementById('ageView').textContent;return a==='―'?null:parseInt(a,10);})(),
+        postal:val('postal'), address:val('address'), tel:val('tel'), email:val('email'),
+        occupation:rv('occupation'), referral:rv('referral'), referral_name:val('referral_name') },
+      health:{ medical_history:rv('medical_history'), medical_history_detail:val('medical_history_detail'),
+        current_treatment:rv('treatment'), treatment_detail:val('treatment_detail'),
+        medications:mv('meds'), medications_other:val('meds_other'),
+        allergy:rv('allergy'), allergy_detail:val('allergy_detail'),
+        health_status:rv('health'), sleep_status:rv('sleep'), alcohol:rv('alcohol'), smoking:rv('smoking'),
+        menstrual_cycle:rv('cycle'), pregnancy:rv('pregnancy'), childbirth:rv('childbirth') },
+      preference:{ menu:mv('menu'), hair_removal_experience:rv('hair_exp'), concern_areas:mv('areas'),
+        self_care_method:mv('care_method'), self_care_frequency:rv('care_freq'), pain_tolerance:rv('pain'),
+        skin_concern:mv('skin_concern'), requests:val('requests') },
+      consent:{ contraindications:mv('contra'), photo_consent:rv('photo_consent'),
+        agreed:!!document.querySelector('input[name="agree"]:checked'),
+        signed_date:val('signed_date'), signature_dataurl:hasSign?canvas.toDataURL('image/png'):null }
+    };
+  }
+  function collectFollowup(){
+    return {
+      meta:{ form:"mishil_counseling", version:"1.2", record_type:"followup", submitted_at:new Date().toISOString() },
+      profile:{ name:val('f_name'), tel:val('f_tel'), gender:rv('f_gender') },
+      feedback:{ satisfaction:rv('f_satisfaction'), hair_reduction:rv('f_reduction'),
+        post_trouble:rv('f_post_trouble'), post_trouble_detail:val('f_post_trouble_detail'),
+        last_pain:rv('f_last_pain'), comment:val('f_feedback') },
+      followup:{ change_since_last:rv('f_change'), change_detail:val('f_change_detail'),
+        today_condition:rv('f_condition'), pregnancy:rv('f_pregnancy'),
+        today_menu:mv('f_menu'), today_areas:mv('f_areas'), requests:val('f_requests'),
+        visit_date:(function(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})() }
+    };
+  }
+
+  /* ---- 確認サマリー（初診のみ） ---- */
+  function buildSummary(){
+    var d=collectInitial();
+    function fmt(v){ if(Array.isArray(v))return v.length?v.join('、'):''; return v||''; }
+    var rows=[
+      ['お名前', d.profile.name+'（'+d.profile.furigana+'）'],
+      ['性別 / 生年月日', d.profile.gender+'　'+d.profile.birthdate+(d.profile.age!=null?'（満'+d.profile.age+'歳）':'')],
+      ['ご連絡先', [d.profile.tel,d.profile.email].filter(Boolean).join(' / ')],
+      ['ご希望メニュー', fmt(d.preference.menu)],
+      ['気になる部位', fmt(d.preference.concern_areas)],
+      ['痛みについて', d.preference.pain_tolerance]
+    ];
+    if(d.profile.gender==='女性') rows.push(['妊娠・授乳', d.health.pregnancy]);
+    rows.push(['禁忌チェック', fmt(d.consent.contraindications)||'該当なし']);
+    rows.push(['SNS掲載', d.consent.photo_consent]);
+    rows.push(['同意', d.consent.agreed?'同意済み':'未同意']);
+    document.getElementById('summary').innerHTML=rows.map(function(r){var v=fmt(r[1]);return '<div class="srow"><div class="sk">'+r[0]+'</div><div class="sv'+(v?'':' empty')+'">'+(v||'未入力')+'</div></div>';}).join('');
+  }
+
+  /* ---- 送信（裏側でDBへ） ---- */
+  function sendToDB(payload){
+    var endpoint=CONFIG.supabaseUrl.replace(/\/$/,'')+'/rest/v1/'+CONFIG.table;
+    var body={
+      record_type:       payload.meta.record_type,
+      customer_name:     payload.profile.name||'',
+      customer_furigana: payload.profile.furigana||'',
+      customer_tel:      payload.profile.tel||'',
+      customer_email:    payload.profile.email||'',
+      signed_date:       (payload.consent&&payload.consent.signed_date)||null,
+      data:              payload
+    };
+    return fetch(endpoint,{ method:'POST', headers:{ 'apikey':CONFIG.supabaseKey,'Authorization':'Bearer '+CONFIG.supabaseKey,'Content-Type':'application/json','Prefer':'return=minimal' }, body:JSON.stringify(body) });
+  }
+
+  function submit(){
+    if(!validate()) return;
+    var payload, btn=seq[idx].querySelector('[data-act="submit"]');
+    if(flow==='initial'){
+      if(!hasSign){ document.getElementById('signErr').classList.add('show'); return; }
+      document.getElementById('signErr').classList.remove('show');
+      payload=collectInitial();
+    }else{
+      payload=collectFollowup();
+    }
+    window.__mishilLastPayload=payload;
+    if(btn){ btn.disabled=true; btn.textContent='送信中...'; }
+    hideAll(); donePanel.classList.add('active'); stepsBar.classList.add('hide'); window.scrollTo({top:0,behavior:'smooth'});
+
+    sendToDB(payload).then(function(res){ if(!res.ok) throw new Error('HTTP '+res.status); console.log('[mishil] saved ('+payload.meta.record_type+')'); })
+      .catch(function(err){ console.error('[mishil] 送信失敗。window.__mishilLastPayload を確認してください。', err); });
+  }
+})();
+</script>
+</body>
+</html>

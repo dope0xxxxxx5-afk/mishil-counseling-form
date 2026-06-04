@@ -611,6 +611,7 @@
       <div class="mark"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#9A7264" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></div>
       <h2>ありがとうございました</h2>
       <p>ご入力内容を受け付けました。スタッフが確認いたします。<br>このまま端末をスタッフへお渡しください。</p>
+      <div style="margin-top:26px"><button type="button" id="doneAction" class="btn btn-primary" style="display:none"></button></div>
     </div>
   </section>
 
@@ -654,6 +655,39 @@
     var input=item.querySelector('input');
     input.addEventListener('change', function(){ item.classList.toggle('sel', input.checked); });
   });
+
+  /* ---- 郵便番号 → 住所 自動入力（zipcloud を JSONP で呼ぶ・CORS不要） ---- */
+  (function(){
+    var postal  = document.querySelector('input[name="postal"]');
+    var address = document.querySelector('input[name="address"]');
+    if(!postal || !address) return;
+    var lastZip = '';
+    function lookup(){
+      var zip = (postal.value||'').replace(/[^0-9]/g,'');
+      if(zip.length!==7 || zip===lastZip) return;
+      lastZip = zip;
+      var cbName = '__zipcb_' + Date.now();
+      var s = document.createElement('script');
+      window[cbName] = function(data){
+        try{
+          if(data && data.status===200 && data.results && data.results[0]){
+            var r = data.results[0];
+            var base = (r.address1||'') + (r.address2||'') + (r.address3||'');
+            if(base && !address.value.trim()){
+              address.value = base;
+              address.focus();
+              var v = address.value; address.value=''; address.value=v; // カーソルを末尾へ
+            }
+          }
+        }finally{ delete window[cbName]; if(s.parentNode) s.parentNode.removeChild(s); }
+      };
+      s.onerror = function(){ delete window[cbName]; if(s.parentNode) s.parentNode.removeChild(s); };
+      s.src = 'https://zipcloud.ibsnet.co.jp/api/search?zipcode=' + zip + '&callback=' + cbName;
+      document.body.appendChild(s);
+    }
+    postal.addEventListener('input', lookup);
+    postal.addEventListener('blur', lookup);
+  })();
 
   /* ---- 条件付き表示 ---- */
   function bindReveal(name, showValue, target){
@@ -868,6 +902,18 @@
     return fetch(endpoint,{ method:'POST', headers:{ 'apikey':CONFIG.supabaseKey,'Authorization':'Bearer '+CONFIG.supabaseKey,'Content-Type':'application/json','Prefer':'return=minimal' }, body:JSON.stringify(body) });
   }
 
+  function configureDoneAction(){
+    var da=document.getElementById('doneAction');
+    if(!da) return;
+    var inClient = !!(window.liff && CONFIG.liffId && window.liff.isInClient && window.liff.isInClient());
+    da.textContent = inClient ? '閉じる' : '最初に戻る';
+    da.style.display='';
+    da.onclick = function(){
+      if(inClient){ try{ window.liff.closeWindow(); }catch(e){ location.reload(); } }
+      else { location.reload(); }
+    };
+  }
+
   function submit(){
     if(!validate()) return;
     var payload, btn=seq[idx].querySelector('[data-act="submit"]');
@@ -880,7 +926,7 @@
     }
     window.__mishilLastPayload=payload;
     if(btn){ btn.disabled=true; btn.textContent='送信中...'; }
-    hideAll(); donePanel.classList.add('active'); stepsBar.classList.add('hide'); window.scrollTo({top:0,behavior:'smooth'});
+    hideAll(); donePanel.classList.add('active'); stepsBar.classList.add('hide'); window.scrollTo({top:0,behavior:'smooth'}); configureDoneAction();
 
     sendToDB(payload).then(function(res){ if(!res.ok) throw new Error('HTTP '+res.status); console.log('[mishil] saved ('+payload.meta.record_type+')'); })
       .catch(function(err){ console.error('[mishil] 送信失敗。window.__mishilLastPayload を確認してください。', err); });

@@ -207,8 +207,8 @@
       <p class="eyebrow">お客様情報</p>
       <p class="card-lead">電子カルテに登録いたします。正確なご入力をお願いいたします。</p>
 
-      <div class="field"><span class="label">お名前（フリガナ）<span class="req">必須</span></span><input type="text" name="furigana" placeholder="ミシル ハナコ"></div>
-      <div class="field"><span class="label">お名前<span class="req">必須</span></span><input type="text" name="name" placeholder="美汁 花子"></div>
+      <div class="field"><span class="label">お名前（フリガナ）<span class="req">必須</span></span><div class="row"><input type="text" name="last_furigana" placeholder="セイ：ミシル" style="flex:1"><input type="text" name="first_furigana" placeholder="メイ：ハナコ" style="flex:1"></div></div>
+      <div class="field"><span class="label">お名前<span class="req">必須</span></span><div class="row"><input type="text" name="last_name" placeholder="姓：美汁" style="flex:1"><input type="text" name="first_name" placeholder="名：花子" style="flex:1"></div></div>
 
       <div class="field">
         <span class="label">性別<span class="req">必須</span></span>
@@ -488,7 +488,7 @@
     <div class="card">
       <p class="eyebrow">2回目以降のお客様</p>
       <p class="card-lead">前回の問診・ご同意内容は継続して有効です。本日の状態のみ確認させてください。</p>
-      <div class="field"><span class="label">お名前<span class="req">必須</span></span><input type="text" name="f_name" placeholder="美汁 花子"></div>
+      <div class="field"><span class="label">お名前<span class="req">必須</span></span><div class="row"><input type="text" name="f_last_name" placeholder="姓：美汁" style="flex:1"><input type="text" name="f_first_name" placeholder="名：花子" style="flex:1"></div></div>
       <div class="field"><span class="label">携帯電話<span class="req">必須</span></span><div class="hint">ご登録カルテとの照合に使用します</div><input type="tel" name="f_tel" placeholder="090-0000-0000"></div>
       <div class="field">
         <span class="label">性別<span class="req">必須</span></span>
@@ -790,7 +790,7 @@
     if(flow==='initial'){
       if(idx===0){
         var g=document.querySelector('input[name="gender"]:checked');
-        var ok=['furigana','name','tel'].every(function(k){return document.querySelector('[name="'+k+'"]').value.trim()!=='';})&&bd.value!==''&&!!g;
+        var ok=['last_furigana','first_furigana','last_name','first_name','tel'].every(function(k){return document.querySelector('[name="'+k+'"]').value.trim()!=='';})&&bd.value!==''&&!!g;
         if(!ok) alert('お名前（フリガナ・お名前）・性別・生年月日・携帯電話のご入力をお願いいたします。');
         return ok;
       }
@@ -803,7 +803,7 @@
     }else if(flow==='followup'){
       if(idx===0){
         var g2=document.querySelector('input[name="f_gender"]:checked');
-        var ok2=['f_name','f_tel'].every(function(k){return document.querySelector('[name="'+k+'"]').value.trim()!=='';})&&!!g2;
+        var ok2=['f_last_name','f_first_name','f_tel'].every(function(k){return document.querySelector('[name="'+k+'"]').value.trim()!=='';})&&!!g2;
         if(!ok2) alert('お名前・携帯電話・性別のご入力をお願いいたします。');
         return ok2;
       }
@@ -836,7 +836,7 @@
   function collectInitial(){
     return {
       meta:{ form:"mishil_counseling", version:"1.2", record_type:"initial", submitted_at:new Date().toISOString() },
-      profile:{ furigana:val('furigana'), name:val('name'), gender:rv('gender'), birthdate:val('birthdate'),
+      profile:{ last_name:val('last_name'), first_name:val('first_name'), last_furigana:val('last_furigana'), first_furigana:val('first_furigana'), name:(val('last_name')+' '+val('first_name')).trim(), furigana:(val('last_furigana')+' '+val('first_furigana')).trim(), gender:rv('gender'), birthdate:val('birthdate'),
         age:(function(){var a=document.getElementById('ageView').textContent;return a==='―'?null:parseInt(a,10);})(),
         postal:val('postal'), address:val('address'), tel:val('tel'), email:val('email'),
         occupation:rv('occupation'), referral:rv('referral'), referral_name:val('referral_name') },
@@ -857,7 +857,7 @@
   function collectFollowup(){
     return {
       meta:{ form:"mishil_counseling", version:"1.2", record_type:"followup", submitted_at:new Date().toISOString() },
-      profile:{ name:val('f_name'), tel:val('f_tel'), gender:rv('f_gender') },
+      profile:{ last_name:val('f_last_name'), first_name:val('f_first_name'), name:(val('f_last_name')+' '+val('f_first_name')).trim(), tel:val('f_tel'), gender:rv('f_gender') },
       feedback:{ satisfaction:rv('f_satisfaction'), hair_reduction:rv('f_reduction'),
         post_trouble:rv('f_post_trouble'), post_trouble_detail:val('f_post_trouble_detail'),
         last_pain:rv('f_last_pain'), comment:val('f_feedback') },
